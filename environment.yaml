@@ -32,4 +32,5 @@ dependencies:
   - wandb
   - hydra-core
   - h5py
+  - albumentations
 
