@@ -29,6 +29,7 @@ from pangaea.utils.utils import (
     seed_worker,
 )
 
+os.environ["WANDB__SERVICE_WAIT"] = "300"
 
 def get_exp_info(hydra_config: HydraConf) -> dict[str, str]:
     """Create a unique experiment name based on the choices made in the config.
