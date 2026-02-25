@@ -172,8 +172,10 @@ class AGBDLite(RawGeoFMDataset):
         if not hasattr(self, 'alos_order') : self.alos_order = f['ALOS_bands'].attrs['order']
 
         # Get the bands as gamma naught values
-        alos_bands = f['ALOS_bands'][idx_start : idx_end, :, :, :].astype(np.float32)
-        alos_bands = np.where(alos_bands == 0, -9999.0, 10 * np.log10(np.power(alos_bands, 2)) - 83.0)
+        _alos_bands = f['ALOS_bands'][idx_start : idx_end, :, :, :].astype(np.float32)
+        mask = (_alos_bands != 0)
+        alos_bands = np.full(_alos_bands.shape, -9999.0, dtype=np.float32)
+        alos_bands[mask] = 10 * np.log10(np.power(_alos_bands[mask], 2)) - 83.0
 
         # Target data -----------------------------------------------------------------------------
         target_value = torch.from_numpy(np.array(f['GEDI'][self.target][idx_start : idx_end], dtype = np.float32)).to(torch.float)
