@@ -5,6 +5,7 @@ import numpy as np
 import h5py
 from os.path import join
 import pickle
+from os import getcwd
 
 continent_to_region = {'North America': ['California', 'Cuba'], 'South America': ['Paraguay', 'FrenchGuiana'],
     'Africa': ['UnitedRepublicofTanzania', 'Ghana'], 'Europe': ['Austria', 'Greece'],
@@ -161,6 +162,7 @@ class AGBD(RawGeoFMDataset):
         multi_modal: bool,
         multi_temporal: int,
         root_path: str,
+        root_path_cluster: str,
         classes: list,
         num_classes: int,
         ignore_index: int,
@@ -184,6 +186,7 @@ class AGBD(RawGeoFMDataset):
             multi_modal=multi_modal,
             multi_temporal=multi_temporal,
             root_path=root_path,
+            root_path_cluster=root_path_cluster,
             classes=classes,
             num_classes=num_classes,
             ignore_index=ignore_index,
@@ -203,6 +206,7 @@ class AGBD(RawGeoFMDataset):
         self.target = target
         self.patch_size = img_size
         self.s2_bands = ['B01', 'B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'B08', 'B8A', 'B09', 'B11', 'B12']
+        if getcwd().startswith('/cluster') : self.root_path = self.root_path_cluster
         self.h5_path, self.mapping = root_path, root_path
         self.fnames = [f'data_subset-{year}-v4_{i}-20.h5' for i in range(20) for year in [2019,2020]]
 

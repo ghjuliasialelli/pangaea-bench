@@ -4,6 +4,7 @@ from pangaea.datasets.base import RawGeoFMDataset
 import numpy as np
 import h5py
 from os.path import join, isfile
+from os import getcwd
 from tqdm import tqdm
 import requests
 import pathlib
@@ -62,6 +63,7 @@ class AGBDLite(RawGeoFMDataset):
         multi_modal: bool,
         multi_temporal: int,
         root_path: str,
+        root_path_cluster: str,
         classes: list,
         num_classes: int,
         ignore_index: int,
@@ -84,6 +86,7 @@ class AGBDLite(RawGeoFMDataset):
             multi_modal=multi_modal,
             multi_temporal=multi_temporal,
             root_path=root_path,
+            root_path_cluster=root_path_cluster,
             classes=classes,
             num_classes=num_classes,
             ignore_index=ignore_index,
@@ -106,6 +109,7 @@ class AGBDLite(RawGeoFMDataset):
         self.patch_size = img_size
         self.zenodo_record = "18485030"
         if auto_download: self.download(self)
+        if getcwd().startswith('/cluster') : self.root_path = self.root_path_cluster
 
         self.s2_bands = ['B01', 'B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'B08', 'B8A', 'B09', 'B11', 'B12']
         if self.eval_big and self.mode == 'test' : self.fname = 'AGBD-test.h5'

@@ -1,6 +1,7 @@
 _target_: pangaea.datasets.agbdlite.AGBDLite
 dataset_name: AGBDLite
 root_path: ./data/AGBDLite
+root_path_cluster: /cluster/scratch/gsialelli
 download_url: "https://zenodo.org/api/records/18485030"
 auto_download: True
 
