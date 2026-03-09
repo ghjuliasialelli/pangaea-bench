@@ -34,7 +34,7 @@ def initialize_index(fnames, mode, chunk_size, path_mapping, path_h5, hold_out_r
 
     # Load the mapping from mode to tile name
     with open(join(path_mapping, 'biomes_splits_to_name.pkl'), 'rb') as f:
-        tile_mapping = pickle.load(f)
+        tile_mapping = pickle.load(f)[mode]
 
     # Skip the tiles in the region to hold out, if specified (only for train and val)
     if hold_out_region and mode in ['train', 'val'] :
@@ -60,7 +60,7 @@ def initialize_index(fnames, mode, chunk_size, path_mapping, path_h5, hold_out_r
             
             # Get the tiles in this file which belong to the mode
             all_tiles = list(f.keys())
-            tiles = np.intersect1d(all_tiles, tile_mapping[mode])
+            tiles = np.intersect1d(all_tiles, tile_mapping)
             
             # Iterate over the tiles
             for tile in tiles :
@@ -162,7 +162,6 @@ class AGBD(RawGeoFMDataset):
         multi_modal: bool,
         multi_temporal: int,
         root_path: str,
-        root_path_cluster: str,
         classes: list,
         num_classes: int,
         ignore_index: int,
@@ -175,6 +174,7 @@ class AGBD(RawGeoFMDataset):
         data_max: dict[str, list[str]],
         download_url: str,
         auto_download: bool,
+        root_path_cluster: str,
         target: str,
         hold_out_region: str | None = None,
         keep_region: bool = False,
@@ -186,7 +186,6 @@ class AGBD(RawGeoFMDataset):
             multi_modal=multi_modal,
             multi_temporal=multi_temporal,
             root_path=root_path,
-            root_path_cluster=root_path_cluster,
             classes=classes,
             num_classes=num_classes,
             ignore_index=ignore_index,
@@ -206,13 +205,13 @@ class AGBD(RawGeoFMDataset):
         self.target = target
         self.patch_size = img_size
         self.s2_bands = ['B01', 'B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'B08', 'B8A', 'B09', 'B11', 'B12']
-        if getcwd().startswith('/cluster') : self.root_path = self.root_path_cluster
+        if getcwd().startswith('/cluster') : self.root_path = root_path_cluster
         self.h5_path, self.mapping = root_path, root_path
         self.fnames = [f'data_subset-{year}-v4_{i}-20.h5' for i in range(20) for year in [2019,2020]]
 
         self.hold_out_region = hold_out_region
         self.keep_region = keep_region
-        self.drop_overlaps = drop_overlaps
+        self.drop_overlaps = drop_overlaps and split == 'test'
 
         self.index, self.length = initialize_index(self.fnames, self.mode, 1, self.mapping, self.h5_path, self.hold_out_region, self.keep_region, self.drop_overlaps)
         self.ranges = init_ranges_for_chunk(self.index, self.length, drop_overlaps = self.drop_overlaps)

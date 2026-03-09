@@ -618,6 +618,9 @@ class RegEvaluator(Evaluator):
         mse = torch.zeros(1, device=self.device)
 
         for batch_idx, data in enumerate(tqdm(self.val_loader, desc=tag)):
+
+            if batch_idx == 500 : break # TODO remove, for debugging purposes
+
             image, target = data['image'], data['target']
             image = {k: v.to(self.device) for k, v in image.items()}
             target = target.to(self.device)
@@ -632,7 +635,7 @@ class RegEvaluator(Evaluator):
                 raise NotImplementedError((f"Inference mode {self.inference_mode} is not implemented."))
 
             # sparse backprop
-            if self.val_loader.dataset.dataset_name == "AGBDLite" :
+            if self.val_loader.dataset.dataset_name in ["AGBDLite", "AGBD"]:
                 valid_mask = (target != self.val_loader.dataset.ignore_index)
                 logits = logits[valid_mask]
                 target = target[valid_mask]
@@ -640,7 +643,8 @@ class RegEvaluator(Evaluator):
             mse += F.mse_loss(logits, target)
 
         torch.distributed.all_reduce(mse, op=torch.distributed.ReduceOp.SUM)
-        mse = mse / len(self.val_loader)
+        # mse = mse / (len(self.val_loader) * torch.distributed.get_world_size())
+        mse = mse / (500 * torch.distributed.get_world_size())
 
         metrics = {"MSE": mse.item(), "RMSE": torch.sqrt(mse).item()}
         self.log_metrics(metrics)

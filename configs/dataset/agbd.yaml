@@ -1,7 +1,6 @@
 _target_: pangaea.datasets.agbd.AGBD
 dataset_name: AGBD
 root_path: /scratch3/gsialelli/patches
-root_path_cluster: /cluster/scratch/gsialelli
 download_url: null
 auto_download: False
 
@@ -9,6 +8,7 @@ img_size: 25
 multi_temporal: False
 multi_modal: False
 
+root_path_cluster: /cluster/scratch/gsialelli
 hold_out_region: null
 keep_region: False
 drop_overlaps: True

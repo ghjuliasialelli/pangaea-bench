@@ -1,7 +1,6 @@
 _target_: pangaea.datasets.agbdlite.AGBDLite
 dataset_name: AGBDLite
 root_path: ./data/AGBDLite
-root_path_cluster: /cluster/scratch/gsialelli
 download_url: "https://zenodo.org/api/records/18485030"
 auto_download: True
 
@@ -9,6 +8,7 @@ img_size: 25
 multi_temporal: False
 multi_modal: False
 
+root_path_cluster: /cluster/scratch/gsialelli
 eval_big: False # whether to evaluate on AGBD-test instead of AGBD-Lite-test
 lite_chunk_size: 1 # should be 32, once we can load in batches
 
