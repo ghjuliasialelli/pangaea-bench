@@ -208,7 +208,8 @@ class AGBD(RawGeoFMDataset):
         if os.environ.get('SLURM_SUBMIT_DIR') is not None:
             print('Running on cluster, using cluster root path.')
             self.root_path = root_path_cluster
-        self.h5_path, self.mapping = root_path, root_path
+        else: self.root_path = root_path
+        self.h5_path, self.mapping = self.root_path, self.root_path
         self.fnames = [f'data_subset-{year}-v4_{i}-20.h5' for i in range(20) for year in [2019,2020]]
 
         self.hold_out_region = hold_out_region
