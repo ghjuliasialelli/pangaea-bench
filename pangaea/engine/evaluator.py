@@ -619,8 +619,6 @@ class RegEvaluator(Evaluator):
 
         for batch_idx, data in enumerate(tqdm(self.val_loader, desc=tag)):
 
-            if batch_idx == 500 : break # TODO remove, for debugging purposes
-
             image, target = data['image'], data['target']
             image = {k: v.to(self.device) for k, v in image.items()}
             target = target.to(self.device)
