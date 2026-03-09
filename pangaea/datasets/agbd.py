@@ -5,7 +5,7 @@ import numpy as np
 import h5py
 from os.path import join
 import pickle
-from os import getcwd
+import os
 
 continent_to_region = {'North America': ['California', 'Cuba'], 'South America': ['Paraguay', 'FrenchGuiana'],
     'Africa': ['UnitedRepublicofTanzania', 'Ghana'], 'Europe': ['Austria', 'Greece'],
@@ -205,7 +205,9 @@ class AGBD(RawGeoFMDataset):
         self.target = target
         self.patch_size = img_size
         self.s2_bands = ['B01', 'B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'B08', 'B8A', 'B09', 'B11', 'B12']
-        if getcwd().startswith('/cluster') : self.root_path = root_path_cluster
+        if os.environ.get('SLURM_SUBMIT_DIR') is not None:
+            print('Running on cluster, using cluster root path.')
+            self.root_path = root_path_cluster
         self.h5_path, self.mapping = root_path, root_path
         self.fnames = [f'data_subset-{year}-v4_{i}-20.h5' for i in range(20) for year in [2019,2020]]
 
