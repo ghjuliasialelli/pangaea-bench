@@ -641,8 +641,7 @@ class RegEvaluator(Evaluator):
             mse += F.mse_loss(logits, target)
 
         torch.distributed.all_reduce(mse, op=torch.distributed.ReduceOp.SUM)
-        # mse = mse / (len(self.val_loader) * torch.distributed.get_world_size())
-        mse = mse / (500 * torch.distributed.get_world_size())
+        mse = mse / (len(self.val_loader) * torch.distributed.get_world_size())
 
         metrics = {"MSE": mse.item(), "RMSE": torch.sqrt(mse).item()}
         self.log_metrics(metrics)

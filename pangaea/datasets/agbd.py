@@ -154,6 +154,21 @@ def find_index_for_chunk(index, ranges, n, total_length, drop_overlaps = False) 
             return fname, tname, chunk_within_tile
 
 
+def get_file_and_idx(eval_lite, mode, index, ranges, n, length, drop_overlaps, handles) :
+
+    if eval_lite and mode == 'val' :
+        idx_start, idx_end = n, n + 1
+        return handles, idx_start, idx_end
+
+    else:
+        # Find the file, tile, and row index corresponding to this chunk
+        file_name, tile_name, idx = find_index_for_chunk(index, ranges, n, length, drop_overlaps)
+        f = handles[file_name][tile_name]
+        idx_start, idx_end = idx, idx + 1
+        return f, idx_start, idx_end
+
+
+
 class AGBD(RawGeoFMDataset):
     def __init__(
         self,
@@ -178,7 +193,8 @@ class AGBD(RawGeoFMDataset):
         target: str,
         hold_out_region: str | None = None,
         keep_region: bool = False,
-        drop_overlaps: bool = False
+        drop_overlaps: bool = False,
+        eval_lite: bool = False
     ):
         super(AGBD, self).__init__(
             split=split,
@@ -202,6 +218,7 @@ class AGBD(RawGeoFMDataset):
 
         assert split in ['train', 'val', 'test'], "split must be one of 'train', 'val', or 'test'"
         self.mode = split
+        self.eval_lite = eval_lite
         self.target = target
         self.patch_size = img_size
         self.s2_bands = ['B01', 'B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'B08', 'B8A', 'B09', 'B11', 'B12']
@@ -210,16 +227,25 @@ class AGBD(RawGeoFMDataset):
             self.root_path = root_path_cluster
         else: self.root_path = root_path
         self.h5_path, self.mapping = self.root_path, self.root_path
-        self.fnames = [f'data_subset-{year}-v4_{i}-20.h5' for i in range(20) for year in [2019,2020]]
 
-        self.hold_out_region = hold_out_region
-        self.keep_region = keep_region
-        self.drop_overlaps = drop_overlaps and split == 'test'
+        # Evaluate on the AGBD-Lite validation set
+        if self.eval_lite and split == 'val' :
+            self.handles = h5py.File(join(self.root_path, 'AGBD-Lite-val.h5'), 'r')
+            self.index, self.ranges, self.drop_overlaps = None, None, None
+            self.length = len(self.handles['GEDI']['agbd'])
 
-        self.index, self.length = initialize_index(self.fnames, self.mode, 1, self.mapping, self.h5_path, self.hold_out_region, self.keep_region, self.drop_overlaps)
-        self.ranges = init_ranges_for_chunk(self.index, self.length, drop_overlaps = self.drop_overlaps)
+        # Regular training and evaluation on the full dataset
+        else:
+            self.fnames = [f'data_subset-{year}-v4_{i}-20.h5' for i in range(20) for year in [2019,2020]]
 
-        self.handles = {fname: h5py.File(join(self.h5_path, fname), 'r') for fname in self.index.keys()}
+            self.hold_out_region = hold_out_region
+            self.keep_region = keep_region
+            self.drop_overlaps = drop_overlaps and split == 'test'
+
+            self.index, self.length = initialize_index(self.fnames, self.mode, 1, self.mapping, self.h5_path, self.hold_out_region, self.keep_region, self.drop_overlaps)
+            self.ranges = init_ranges_for_chunk(self.index, self.length, drop_overlaps = self.drop_overlaps)
+
+            self.handles = {fname: h5py.File(join(self.h5_path, fname), 'r') for fname in self.index.keys()}
 
 
     def __len__(self):
@@ -248,10 +274,7 @@ class AGBD(RawGeoFMDataset):
         """
 
         # Find the file, tile, and row index corresponding to this chunk
-        file_name, tile_name, idx = find_index_for_chunk(self.index, self.ranges, n, self.length, self.drop_overlaps)
-        f = self.handles[file_name][tile_name]
-        idx_start, idx_end = idx, idx + 1
-
+        f, idx_start, idx_end = get_file_and_idx(self.eval_lite, self.mode, self.index, self.ranges, n, self.length, self.drop_overlaps, self.handles)
 
         # Sentinel-2 bands ------------------------------------------------------------------------
         

@@ -12,6 +12,7 @@ root_path_cluster: /cluster/scratch/gsialelli
 hold_out_region: null
 keep_region: False
 drop_overlaps: True
+eval_lite: True
 
 # for regression (agbd or rh98)
 target: "agbd" # agbd or rh98
