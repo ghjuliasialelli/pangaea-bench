@@ -80,6 +80,15 @@ class AGBDLite(RawGeoFMDataset):
         eval_big: bool, 
         lite_chunk_size: int
     ):
+
+        assert split in ['train', 'val', 'test'], "split must be one of 'train', 'val', or 'test'"
+        self.mode = split
+        self.eval_big = eval_big
+        self.target = target
+        self.lite_chunk_size = lite_chunk_size
+        self.patch_size = img_size
+        self.zenodo_record = "18485030"
+
         super(AGBDLite, self).__init__(
             split=split,
             dataset_name=dataset_name,
@@ -100,13 +109,6 @@ class AGBDLite(RawGeoFMDataset):
             auto_download=auto_download,
         )
 
-        assert split in ['train', 'val', 'test'], "split must be one of 'train', 'val', or 'test'"
-        self.mode = split
-        self.eval_big = eval_big
-        self.target = target
-        self.lite_chunk_size = lite_chunk_size
-        self.patch_size = img_size
-        self.zenodo_record = "18485030"
         if auto_download: self.download(self)
         if os.environ.get('SLURM_SUBMIT_DIR') is not None:
             print('Running on cluster, using cluster root path.')
