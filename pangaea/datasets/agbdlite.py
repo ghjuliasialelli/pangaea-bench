@@ -109,12 +109,14 @@ class AGBDLite(RawGeoFMDataset):
             auto_download=auto_download,
         )
 
-        if auto_download: self.download(self)
         if os.environ.get('SLURM_SUBMIT_DIR') is not None:
             print('Running on cluster, using cluster root path.')
             self.root_path = root_path_cluster
+        if auto_download: self.download(self)
         self.s2_bands = ['B01', 'B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'B08', 'B8A', 'B09', 'B11', 'B12']
-        if self.eval_big and self.mode == 'test' : self.fname = 'AGBD-test.h5'
+        if self.eval_big and self.mode == 'test' :
+            print("Using AGBD-test.h5 file for evaluation.")
+            self.fname = 'AGBD-test.h5'
         else: self.fname = f'AGBD-Lite-{self.mode}.h5'
         self.f_handle = h5py.File(join(self.root_path, self.fname), 'r')
 

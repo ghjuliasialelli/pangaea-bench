@@ -282,7 +282,7 @@ def main(cfg: DictConfig) -> None:
         batch_size=cfg.test_batch_size,
         num_workers=cfg.test_num_workers,
         pin_memory=True,
-        prefetch_factor=6,
+        prefetch_factor=4,
         persistent_workers=False,
         drop_last=False,
         collate_fn=collate_fn,
