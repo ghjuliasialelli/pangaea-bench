@@ -1,6 +1,6 @@
-_target_: pangaea.encoders.terramind_encoder.terramind_v1_large
-encoder_weights: ./pretrained_models/TerraMind_v1_large.pt
-download_url: null #https://huggingface.co/ibm-esa-geospatial/TerraMind-1.0-large/blob/main/TerraMind_v1_large.pt
+_target_: pangaea.encoders.terramind_encoder.terramind_v1_tiny
+encoder_weights: /home/vmarsocci/pangaea-bench/pretrained_models/TerraMind_v1_tiny.pt
+download_url: #https://drive.google.com/uc?id=1CseO5vvMReGlAulm5o4ZgbjUgj8VlAH7&export=download&confirm=yes
 # ckpt_path: /home/vmarsocci/pangaea-bench/pretrained_models/TerraMind_v1_large.pt
 
 # dim: 768
@@ -34,9 +34,9 @@ input_bands:
     - VH
 
 output_layers:
+  - 3
+  - 5
   - 7
   - 11
-  - 15
-  - 23
 
-output_dim: 1024
+output_dim: 192
