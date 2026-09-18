@@ -1,0 +1,30 @@
+# Like cls_resize, but pads the input up to the encoder's input size instead of resampling it,
+# so the data keeps its native resolution (GSD). The padded border is filled by mirroring the
+# image (padding_mode: reflect|symmetric|edge|constant) and the target is filled with ignore_index.
+
+train:
+    _target_: pangaea.engine.data_preprocessor.Preprocessor
+    preprocessor_cfg:
+        - _target_: pangaea.engine.data_preprocessor.PadToEncoder
+          padding_mode: reflect
+        - _target_: pangaea.engine.data_preprocessor.BandFilter
+        - _target_: pangaea.engine.data_preprocessor.NormalizeMeanStd
+        - _target_: pangaea.engine.data_preprocessor.BandPadding
+
+val:
+    _target_: pangaea.engine.data_preprocessor.Preprocessor
+    preprocessor_cfg:
+        - _target_: pangaea.engine.data_preprocessor.PadToEncoder
+          padding_mode: reflect
+        - _target_: pangaea.engine.data_preprocessor.BandFilter
+        - _target_: pangaea.engine.data_preprocessor.NormalizeMeanStd
+        - _target_: pangaea.engine.data_preprocessor.BandPadding
+
+test:
+    _target_: pangaea.engine.data_preprocessor.Preprocessor
+    preprocessor_cfg:
+        - _target_: pangaea.engine.data_preprocessor.PadToEncoder
+          padding_mode: reflect
+        - _target_: pangaea.engine.data_preprocessor.BandFilter
+        - _target_: pangaea.engine.data_preprocessor.NormalizeMeanStd
+        - _target_: pangaea.engine.data_preprocessor.BandPadding

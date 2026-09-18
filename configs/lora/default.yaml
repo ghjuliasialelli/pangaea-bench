@@ -1,0 +1,7 @@
+# LoRA on the encoder's attention projections. Enable with `lora=default finetune=true`.
+# The encoder's own weights stay frozen; only the low-rank adapters (and the decoder) train.
+r: 8
+alpha: 16
+# null = every Linear inside the attention modules (e.g. qkv + proj) and every
+# nn.MultiheadAttention's in_proj/out_proj. Otherwise a list of module names, e.g. [qkv].
+target_modules: null
