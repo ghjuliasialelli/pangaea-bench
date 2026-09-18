@@ -352,7 +352,12 @@ class AggregationBackbone(torch.nn.Module):
 
     def forward(self, x):
         B, C, T, H, W = x.shape
-        x = x.reshape(B, C * T, H, W)
+        # The slicing loop below is upstream SatlasPretrain code, which expects the flat
+        # channel axis to be TIME-major: each consecutive block of `image_channels` is one
+        # complete image. A bare reshape of (B, C, T, H, W) is BAND-major (index c*T + t),
+        # so each "image" came out as a few bands smeared across all dates. Permute first.
+        # No-op when T == 1. See allenai/satlaspretrain_models AggregationBackbone.forward.
+        x = x.permute(0, 2, 1, 3, 4).reshape(B, T * C, H, W)
         # First get features of each image.
         all_features = []
         for i in range(0, x.shape[1], self.image_channels):

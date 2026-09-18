@@ -617,6 +617,13 @@ class RegEvaluator(Evaluator):
 
         mse = torch.zeros(1, device=self.device)
 
+        # Optional per-sample dump for downstream analysis (e.g. binned-residual plots).
+        # Enabled by setting AGBD_DUMP_H5 to an output path; collects the centre-pixel
+        # (prediction, label) pair for every valid sample, in the raw target units (Mg/ha
+        # for agbd), matching the schema data/agbd_lite/helper/plot.py reads.
+        dump_path = os.environ.get("AGBD_DUMP_H5")
+        dump_preds, dump_labels = [], []
+
         for batch_idx, data in enumerate(tqdm(self.val_loader, desc=tag)):
 
             image, target = data['image'], data['target']
@@ -638,6 +645,10 @@ class RegEvaluator(Evaluator):
                 logits = logits[valid_mask]
                 target = target[valid_mask]
 
+            if dump_path is not None:
+                dump_preds.append(logits.detach().float().cpu())
+                dump_labels.append(target.detach().float().cpu())
+
             mse += F.mse_loss(logits, target)
 
         torch.distributed.all_reduce(mse, op=torch.distributed.ReduceOp.SUM)
@@ -646,9 +657,37 @@ class RegEvaluator(Evaluator):
         metrics = {"MSE": mse.item(), "RMSE": torch.sqrt(mse).item()}
         self.log_metrics(metrics)
 
+        if dump_path is not None:
+            self._dump_predictions(dump_path, dump_preds, dump_labels)
+
         used_time = time.time() - t
 
         return metrics, used_time
+
+    def _dump_predictions(self, dump_path, dump_preds, dump_labels):
+        """Gather the per-sample (prediction, label) pairs across ranks and write them, on rank 0,
+        to an h5 file with 'predictions' and 'labels' datasets (raw target units). Used to feed
+        binned-residual / density plots that need the full residual distribution rather than an
+        aggregate metric."""
+        import h5py
+
+        preds = torch.cat(dump_preds).numpy() if dump_preds else np.empty(0, dtype=np.float32)
+        labels = torch.cat(dump_labels).numpy() if dump_labels else np.empty(0, dtype=np.float32)
+
+        world_size = torch.distributed.get_world_size()
+        if world_size > 1:
+            gathered = [None] * world_size
+            torch.distributed.all_gather_object(gathered, (preds, labels))
+            if self.rank == 0:
+                preds = np.concatenate([g[0] for g in gathered])
+                labels = np.concatenate([g[1] for g in gathered])
+
+        if self.rank == 0:
+            os.makedirs(os.path.dirname(os.path.abspath(dump_path)), exist_ok=True)
+            with h5py.File(dump_path, 'w') as f:
+                f.create_dataset('predictions', data=preds.astype(np.float32))
+                f.create_dataset('labels', data=labels.astype(np.float32))
+            self.logger.info(f"[{self.split}] dumped {len(preds)} per-sample predictions to {dump_path}")
 
     @torch.no_grad()
     def __call__(self, model, model_name='model', model_ckpt_path=None):

@@ -31,4 +31,5 @@ defaults:
   - criterion: ???
   - lr_scheduler: multi_step_lr
   - optimizer: adamw
+  - lora: null  # e.g. lora=default (requires finetune=true)
   - _self_ 

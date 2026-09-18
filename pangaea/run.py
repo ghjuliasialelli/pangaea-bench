@@ -28,6 +28,7 @@ from pangaea.utils.utils import (
     get_generator,
     seed_worker,
 )
+from pangaea.utils.lora import apply_lora
 
 os.environ["WANDB__SERVICE_WAIT"] = "300"
 
@@ -46,6 +47,8 @@ def get_exp_info(hydra_config: HydraConf) -> dict[str, str]:
     ).hexdigest()[:6]
     timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
     fm = choices["encoder"]
+    if choices.get("lora") is not None:
+        fm = f"{fm}_lora"
     decoder = choices["decoder"]
     ds = choices["dataset"]
     task = choices["task"]
@@ -135,6 +138,18 @@ def main(cfg: DictConfig) -> None:
         cfg.decoder,
         encoder=encoder,
     )
+    if cfg.get("lora") is not None:
+        # the decoders run a non-finetuned encoder under torch.no_grad(), which would
+        # leave the adapters without gradients
+        if not cfg.finetune:
+            raise ValueError("LoRA requires finetune=true.")
+        apply_lora(
+            decoder.encoder,
+            r=cfg.lora.r,
+            alpha=cfg.lora.alpha,
+            target_modules=cfg.lora.target_modules,
+            logger=logger,
+        )
     decoder.to(device)
     decoder = torch.nn.parallel.DistributedDataParallel(
         decoder,
@@ -146,6 +161,15 @@ def main(cfg: DictConfig) -> None:
         "Built {} for with {} encoder.".format(
             decoder.module.model_name, type(encoder).__name__
         )
+    )
+    n_enc = sum(p.numel() for p in encoder.parameters() if p.requires_grad)
+    n_dec = sum(
+        p.numel()
+        for n, p in decoder.module.named_parameters()
+        if not n.startswith("encoder.") and p.requires_grad
+    )
+    logger.info(
+        "Trainable parameters: {:,} in the decoder, {:,} in the encoder.".format(n_dec, n_enc)
     )
 
     modalities = list(encoder.input_bands.keys())

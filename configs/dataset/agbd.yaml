@@ -6,7 +6,7 @@ auto_download: False
 
 img_size: 25
 multi_temporal: False
-multi_modal: False
+multi_modal: True
 
 root_path_cluster: /cluster/scratch/gsialelli
 hold_out_region: null
@@ -38,17 +38,24 @@ bands:
     - B9
     - B11
     - B12
+  sar:
+    - VV  # ALOS-PALSAR-2 HH (L-band), named after its Sentinel-1 C-band co-pol counterpart so SAR encoders match it
+    - VH  # ALOS-PALSAR-2 HV (L-band), named after its Sentinel-1 C-band cross-pol counterpart
 
-# statistics
+# statistics (sar: computed on clipped dB of valid pixels, DN > 1)
 
 data_mean:
   optical: [0.1244767, 0.13442503, 0.15990143, 0.15322255, 0.2027034, 0.32371777, 0.3625338, 0.3777227, 0.38758147, 0.38764006, 0.29084504, 0.21135607]
+  sar: [-9.481088, -15.808132]
 
 data_std:
   optical: [0.024913007, 0.02851103, 0.032457292, 0.038697336, 0.042601082, 0.07086351, 0.08404868, 0.09149762, 0.08816632, 0.082269475, 0.07562889, 0.059278008]
+  sar: [3.835809, 5.181973]
  
 data_min:
   optical: [1e-04, 1e-04, 1e-04, 1e-04, 0.0633, 0.0502, 0.0616, 0.0278, 0.055, 0.0012, 0.0954, 0.0975]
+  sar: [-24.0, -35.0]  # SAR clip bounds in dB (p0.1 of valid AGBD-Lite train px, same as agbdlite); nodata is set to these
 
 data_max:
   optical: [1.7, 2.1088, 2.12, 2.0032, 1.7413, 1.7228, 1.7084, 1.7312, 1.688, 1.7915, 1.648, 1.6775]
+  sar: [3.0, -4.0]  # SAR clip bounds in dB (p99.9 of valid AGBD-Lite train px, same as agbdlite)

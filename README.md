@@ -361,6 +361,69 @@ torchrun --nnodes=1 --nproc_per_node=1 pangaea/run.py \
    finetune=True
 ```
 
+### 💻 LoRA Finetuning
+
+To train low-rank adapters on the encoder's attention projections instead of the full encoder, add `lora=default` together with `finetune=true`. The pretrained encoder weights stay frozen; only the adapters and the decoder are trained. Rank, scaling and target layers are set in `configs/lora/default.yaml` (e.g. `lora.r=16`, `lora.target_modules=[qkv]`). This works for all transformer encoders; convolutional encoders (ResNet, UNet) are rejected. Experiment directories get a `_lora` suffix after the encoder name.
+
+```
+torchrun --nnodes=1 --nproc_per_node=1 pangaea/run.py \
+   --config-name=train \
+   dataset=agbdlite \
+   encoder=remoteclip \
+   decoder=reg_upernet \
+   preprocessing=reg_resize \
+   criterion=mse \
+   task=regression \
+   finetune=true \
+   lora=default
+```
+
+### 💻 Padding instead of Resizing (native resolution)
+
+`preprocessing=*_resize` brings a chip up to the encoder's input size with `ResizeToEncoder`, which
+resamples it: a 25x25 chip at 10 m/px stretched to 224x224 is shown to the encoder at ~1.1 m/px, a
+scale it was never pretrained on. `preprocessing=*_pad` (`reg_pad`, `seg_pad`, `cls_pad`) swaps in
+`PadToEncoder`, which keeps every pixel at its native GSD and fills the border instead:
+
+```
+torchrun --nnodes=1 --nproc_per_node=1 pangaea/run.py \
+   --config-name=train \
+   dataset=agbdlite \
+   encoder=remoteclip \
+   decoder=reg_upernet \
+   preprocessing=reg_pad \
+   criterion=mse \
+   task=regression
+```
+
+The image is centered in the padded canvas and the border is filled by mirroring it. The fill is set
+with `padding_mode`, from the command line:
+
+```
+preprocessing=reg_pad \
+preprocessing.train.preprocessor_cfg.0.padding_mode=symmetric \
+preprocessing.val.preprocessor_cfg.0.padding_mode=symmetric \
+preprocessing.test.preprocessor_cfg.0.padding_mode=symmetric
+```
+
+| `padding_mode` | border fill |
+| --- | --- |
+| `reflect` (default) | mirrors the image, edge pixel not repeated (`c b [a b c d] c b`) |
+| `symmetric` | mirrors the image, edge pixel repeated (`b a [a b c d] d c`) |
+| `edge` | replicates the border pixel |
+| `constant` | `fill_value`, or the per-band `data_mean` if it is not set |
+
+Unlike `torch.nn.functional.pad`, the mirroring modes accept a padding larger than the image (the
+reflection is tiled), which a 25 -> 224 pad needs. Note that this also means most of what a 224x224
+encoder sees for a 25x25 chip is mirrored copies of it, so `constant` is worth comparing against.
+
+A dense target is padded alongside the image and filled with `ignore_index` (a classification label
+has no grid and is left alone), so image and target stay on the same grid - the decoder's output
+shape is taken from the target - and the border carries no supervision. **This relies on the loss and the metrics honouring `ignore_index`** - true for
+`cross_entropy`, `weighted_cross_entropy`, `dice`, and for the AGBD/AGBD-Lite regression path, which
+masks on `ignore_index` before the loss. A bare `torch.nn.MSELoss` on a *dense* regression target
+does not, and would fit the fill value; check your criterion before using this on a new dataset.
+
 ### 💻 Fully Supervised Baseline 
 
 The repo supports also training fully supervised baselines (i.e. UNet and ViT). To run these, follow the same command line rules as for other models. Keep in mind that setting finetune=True is necessary since this fully supervised approach trains the model from scratch. 

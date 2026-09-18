@@ -769,6 +769,198 @@ class ResizeToEncoder(Resize):
         super().__init__(size, interpolation, antialias, resize_target, **meta)
 
 
+class Pad(BasePreprocessor):
+    """Pad the data up to `size` instead of resampling it, keeping the native resolution.
+
+    `Resize`/`ResizeToEncoder` change the ground sampling distance: a 25x25 10 m chip fed to a
+    224x224 encoder is stretched to ~1.1 m/px, so the encoder sees a scale it was never
+    pretrained on. `Pad` keeps every pixel at its native GSD and fills the border instead.
+
+    The target is padded too (with `ignore_index`), so image and target stay on the same grid and
+    the decoder's `output_shape` (which the trainer/evaluator take from the target) still matches
+    the image. The padded border therefore carries no supervision *provided the loss and the
+    metrics honour `ignore_index`* - true for `cross_entropy`/`weighted_cross_entropy`/`dice`, and
+    for the AGBD/AGBDLite regression path, which masks on `ignore_index` before the loss. A bare
+    `torch.nn.MSELoss` on a *dense* regression target does NOT honour it and would fit the fill
+    value, so check your criterion before using this on a new dataset.
+
+    Dimensions already >= `size` are left untouched (put a crop preprocessor before this one to
+    bring them down).
+    """
+
+    PADDING_MODES = ("reflect", "symmetric", "edge", "constant")
+
+    def __init__(
+        self,
+        size: int | Sequence[int],
+        padding_mode: str = "reflect",
+        fill_value: float | None = None,
+        center: bool = True,
+        **meta,
+    ) -> None:
+        """Initialize the Pad preprocessor.
+        Args:
+            size (int or sequence): target size (h, w) to pad up to.
+            padding_mode (str): how to fill the image border. One of:
+                "reflect" (mirror without repeating the edge pixel), "symmetric" (mirror with the
+                edge pixel repeated), "edge" (replicate the border pixel), "constant".
+                Unlike `torch.nn.functional.pad`, the mirroring modes accept a padding larger than
+                the image (the reflection is tiled), which is what a 25 -> 224 pad needs.
+            fill_value (float, optional): fill for padding_mode="constant". Defaults to the
+                per-modality `data_mean`, i.e. a neutral value after normalization.
+            center (bool, optional): center the data in the padded canvas. If False, the data goes
+                to the top-left corner. Defaults to True.
+            meta: statistics/info of the input data and target encoder
+                data_mean: global mean value of incoming data, used as the default constant fill
+                ignore_index: ignore index used to pad the target
+        """
+        super().__init__()
+
+        if padding_mode not in self.PADDING_MODES:
+            raise ValueError(
+                f"padding_mode must be one of {self.PADDING_MODES}, got {padding_mode}"
+            )
+
+        self.size = tuple(
+            _setup_size(
+                size, error_msg="Please provide only two dimensions (h, w) for size."
+            )
+        )
+        self.padding_mode = padding_mode
+        self.fill_value = fill_value
+        self.center = center
+        self.pad_value = meta["data_mean"]
+        self.ignore_index = meta["ignore_index"]
+
+    @staticmethod
+    def _pad_index(n: int, before: int, after: int, mode: str) -> torch.Tensor:
+        """Indices into a length-`n` axis realising `before`/`after` padding of the given mode.
+
+        Index-based rather than `F.pad`-based so that an arbitrarily large padding works in one
+        shot (`F.pad(mode="reflect")` refuses a padding >= the input size).
+        """
+        idx = torch.arange(-before, n + after)
+
+        if n == 1 or mode == "edge":
+            return idx.clamp(0, n - 1)
+
+        if mode == "reflect":
+            # ... c b [a b c d] c b ... : period 2n-2, the edge pixel is not repeated
+            period = 2 * n - 2
+            idx = idx % period
+            return torch.where(idx >= n, period - idx, idx)
+
+        # symmetric: ... b a [a b c d] d c ... : period 2n, the edge pixel is repeated
+        period = 2 * n
+        idx = idx % period
+        return torch.where(idx >= n, period - 1 - idx, idx)
+
+    def get_params(self, height: int, width: int) -> Tuple[int, int, int, int]:
+        """Padding (top, bottom, left, right) needed to bring (height, width) up to self.size."""
+        pad_h = max(self.size[0] - height, 0)
+        pad_w = max(self.size[1] - width, 0)
+        top = pad_h // 2 if self.center else 0
+        left = pad_w // 2 if self.center else 0
+        return top, pad_h - top, left, pad_w - left
+
+    def __call__(
+        self, data: dict[str, torch.Tensor | dict[str, torch.Tensor]]
+    ) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
+        """Pad the data.
+        Args:
+            data (dict): input data.
+        Returns:
+            dict[str, torch.Tensor | dict[str, torch.Tensor]]: output dictionary following the format
+            {"image":
+                {
+                encoder_modality_1: torch.Tensor of shape (C T H W) (T=1 if single timeframe),
+                ...
+                encoder_modality_N: torch.Tensor of shape (C T H W) (T=1 if single timeframe),
+                 },
+            "target": torch.Tensor of shape (H W),
+             "metadata": dict}.
+        """
+        base_shape = data["image"][list(data["image"].keys())[0]].shape
+        height, width = base_shape[-2:]
+
+        # one padding is computed and applied to everything, so everything must start equal
+        for k, v in data["image"].items():
+            if v.shape[-2:] != base_shape[-2:]:
+                shape = {k: tuple(v.shape[-2:]) for k, v in data["image"].items()}
+                raise AssertionError(
+                    f"Image size (H, W) from all modalities must be equal, Got {str(shape)}"
+                )
+        # a 0-d / 1-d target is a classification label, with no grid to pad
+        pad_target = data["target"].dim() >= 2
+        if pad_target and data["target"].shape[-2:] != base_shape[-2:]:
+            raise AssertionError(
+                f"Image size and target size (H, W) must be equal, Got "
+                f"{str(tuple(base_shape[-2:]))} and {str(tuple(data['target'].shape[-2:]))}"
+            )
+
+        top, bottom, left, right = self.get_params(height, width)
+
+        if top + bottom + left + right == 0:
+            return data
+
+        if self.padding_mode == "constant":
+            for k, v in data["image"].items():
+                c, t = v.shape[0], v.shape[1]
+                fill = (
+                    torch.full((c,), float(self.fill_value))
+                    if self.fill_value is not None
+                    else self.pad_value[k]
+                )
+                padded = (
+                    fill.to(v.dtype)
+                    .reshape(-1, 1, 1, 1)
+                    .repeat(1, t, height + top + bottom, width + left + right)
+                )
+                padded[:, :, top : top + height, left : left + width] = v
+                data["image"][k] = padded
+        else:
+            rows = self._pad_index(height, top, bottom, self.padding_mode)
+            cols = self._pad_index(width, left, right, self.padding_mode)
+            for k, v in data["image"].items():
+                data["image"][k] = v.index_select(-2, rows).index_select(-1, cols)
+
+        # the border carries no supervision: the target is always filled with ignore_index
+        if pad_target:
+            data["target"] = TF.pad(
+                data["target"],
+                padding=[left, top, right, bottom],
+                fill=self.ignore_index,
+                padding_mode="constant",
+            )
+
+        return data
+
+    def update_meta(self, meta):
+        """Tracking the meta statistics/info for next processor."""
+        meta["data_img_size"] = self.size[0]
+        return meta
+
+
+class PadToEncoder(Pad):
+    def __init__(
+        self,
+        padding_mode: str = "reflect",
+        fill_value: float | None = None,
+        center: bool = True,
+        **meta,
+    ) -> None:
+        """Pad the data up to the encoder's input size, keeping the native resolution.
+        The drop-in alternative to `ResizeToEncoder` - see `Pad` for the caveats.
+        Args:
+            padding_mode (str): "reflect" (default), "symmetric", "edge" or "constant".
+            fill_value (float, optional): fill for padding_mode="constant". Defaults to data_mean.
+            center (bool, optional): center the data in the padded canvas.
+            meta: statistics/info of the input data and target encoder
+        """
+        size = meta["encoder_input_size"]
+        super().__init__(size, padding_mode, fill_value, center, **meta)
+
+
 class RandomResizedCrop(BasePreprocessor):
     def __init__(
         self,

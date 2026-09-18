@@ -1,5 +1,6 @@
 import torch
 from pangaea.datasets.base import RawGeoFMDataset
+from pangaea.datasets.agbd import ALOS_BANDS, alos_dn_to_db
 
 import numpy as np
 import h5py
@@ -176,14 +177,13 @@ class AGBDLite(RawGeoFMDataset):
 
         # SAR bands (from ALOS-PALSAR-2) ----------------------------------------------------------
 
-        # Set the order for the ALOS bands
-        if not hasattr(self, 'alos_order') : self.alos_order = f['ALOS_bands'].attrs['order']
+        # Set the order and indices for the ALOS bands
+        if not hasattr(self, 'alos_order') : self.alos_order = list(f['ALOS_bands'].attrs['order'])
+        if not hasattr(self, 'alos_indices') : self.alos_indices = [self.alos_order.index(band) for band in ALOS_BANDS]
 
-        # Get the bands as gamma naught values
-        _alos_bands = f['ALOS_bands'][idx_start : idx_end, :, :, :].astype(np.float32)
-        mask = (_alos_bands != 0)
-        alos_bands = np.full(_alos_bands.shape, -9999.0, dtype=np.float32)
-        alos_bands[mask] = 10 * np.log10(np.power(_alos_bands[mask], 2)) - 83.0
+        # Get the bands as clipped gamma naught values
+        alos_bands = f['ALOS_bands'][idx_start : idx_end, :, :, self.alos_indices]
+        alos_bands = alos_dn_to_db(alos_bands, self.data_min['sar'], self.data_max['sar'])
 
         # Target data -----------------------------------------------------------------------------
         target_value = torch.from_numpy(np.array(f['GEDI'][self.target][idx_start : idx_end], dtype = np.float32)).to(torch.float)

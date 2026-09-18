@@ -7,12 +7,19 @@ Usage:
         batch_size=64 \
         --warmup 20 --iterations 100
 
+    # Use random dummy data (no dataset loading):
+    python throughput.py \
+        task=regression dataset=agbdlite encoder=gfmswin \
+        decoder=reg_upernet preprocessing=reg_default criterion=mse \
+        batch_size=64 --dummy
+
 All Hydra overrides (task, dataset, encoder, etc.) work as in run.py.
-Extra CLI flags (--warmup, --iterations) control the benchmark.
+Extra CLI flags (--warmup, --iterations, --dummy) control the benchmark.
 """
 
 import argparse
 import sys
+import threading
 import time
 
 import hydra
@@ -28,12 +35,18 @@ from pangaea.utils.collate_fn import get_collate_fn
 
 
 def parse_extra_args():
-    """Parse --warmup and --iterations before Hydra consumes the rest."""
+    """Parse --warmup, --iterations, and --dummy before Hydra consumes the rest."""
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--warmup", type=int, default=20,
                         help="Number of warm-up forward passes (discarded).")
     parser.add_argument("--iterations", type=int, default=100,
                         help="Number of timed forward passes.")
+    parser.add_argument("--dummy", action="store_true",
+                        help="Use random dummy data instead of the real dataset.")
+    parser.add_argument("--batch_size", type=int, default=64,
+                        help="Batch size for benchmarking.")
+    parser.add_argument("--num_workers", type=int, default=8,
+                        help="Number of DataLoader workers.")
     args, remaining = parser.parse_known_args()
     # Put remaining args back so Hydra can parse them
     sys.argv = [sys.argv[0]] + remaining
@@ -43,15 +56,64 @@ def parse_extra_args():
 extra_args = parse_extra_args()
 
 
+def make_dummy_batch(encoder, batch_size, device):
+    """Create a single random batch matching the encoder's expected input."""
+    input_size = encoder.input_size
+    image = {}
+    for modality, bands in encoder.input_bands.items():
+        image[modality] = torch.randn(batch_size, len(bands), input_size, input_size,
+                                      device=device)
+    target = torch.randn(batch_size, 1, input_size, input_size, device=device)
+    return image, target
+
+
+class PrefetchIterator:
+    """Prefetches the next batch on a background thread so data loading
+    is overlapped with GPU compute."""
+
+    def __init__(self, loader, device):
+        self._loader = loader
+        self._device = device
+        self._loader_iter = iter(loader)
+        self._next_batch = None
+        self._thread = None
+        # Kick off the first prefetch
+        self._prefetch()
+
+    def _load_next(self):
+        try:
+            data = next(self._loader_iter)
+        except StopIteration:
+            self._loader_iter = iter(self._loader)
+            data = next(self._loader_iter)
+        image = {k: v.to(self._device, non_blocking=True) for k, v in data["image"].items()}
+        target = data["target"].to(self._device, non_blocking=True)
+        self._next_batch = (image, target)
+
+    def _prefetch(self):
+        self._thread = threading.Thread(target=self._load_next, daemon=True)
+        self._thread.start()
+
+    def next(self):
+        """Return the prefetched batch and start loading the next one."""
+        self._thread.join()
+        image, target = self._next_batch
+        self._prefetch()
+        return image, target
+
+
 @hydra.main(version_base=None, config_path="configs", config_name="train")
 def main(cfg: DictConfig) -> None:
     warmup = extra_args.warmup
     iterations = extra_args.iterations
-    batch_size = cfg.batch_size
+    dummy = extra_args.dummy
+    batch_size = extra_args.batch_size
+    num_workers = extra_args.num_workers
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     if device.type != "cuda":
         print("WARNING: No GPU detected. Throughput numbers on CPU are not meaningful.")
+        exit(1)
 
     # ── Build model ──────────────────────────────────────────────────────
     encoder: Encoder = instantiate(cfg.encoder)
@@ -68,71 +130,84 @@ def main(cfg: DictConfig) -> None:
     print(f"Model        : {decoder.model_name}  (encoder: {encoder.model_name})")
     print(f"Parameters   : {n_params:,} total, {n_trainable:,} trainable")
 
-    # ── Build dataset & loader ───────────────────────────────────────────
-    preprocessor = instantiate(
-        cfg.preprocessing.test,
-        dataset_cfg=cfg.dataset,
-        encoder_cfg=cfg.encoder,
-        _recursive_=False,
-    )
-    raw_dataset: RawGeoFMDataset = instantiate(cfg.dataset, split="test")
-    dataset = GeoFMDataset(raw_dataset, preprocessor)
+    if dummy:
+        # ── Dummy data mode ──────────────────────────────────────────────
+        image, target = make_dummy_batch(encoder, batch_size, device)
+        output_shape = target.shape[-2:]
 
-    modalities = list(encoder.input_bands.keys())
-    collate_fn = get_collate_fn(modalities)
+        print(f"Data         : dummy (random tensors)")
+        print(f"Batch size   : {batch_size}")
+        print(f"Warm-up      : {warmup} forward passes")
+        print(f"Iterations   : {iterations} forward passes")
+        print()
 
-    loader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        num_workers=cfg.num_workers,
-        pin_memory=True,
-        drop_last=True,
-        collate_fn=collate_fn,
-        shuffle=True,
-    )
+        print("Warming up …")
+        with torch.no_grad():
+            for _ in range(warmup):
+                _ = decoder(image, output_shape=output_shape)
 
-    print(f"Dataset      : {cfg.dataset.dataset_name}  (split=test, {len(dataset)} samples)")
-    print(f"Batch size   : {batch_size}")
-    print(f"Warm-up      : {warmup} forward passes")
-    print(f"Iterations   : {iterations} forward passes")
-    print()
+        if device.type == "cuda":
+            torch.cuda.synchronize()
 
-    # ── Helper: get one batch (cycles the loader) ────────────────────────
-    loader_iter = iter(loader)
+        print("Benchmarking …")
+        if device.type == "cuda":
+            torch.cuda.synchronize()
 
-    def next_batch():
-        nonlocal loader_iter
-        try:
-            return next(loader_iter)
-        except StopIteration:
-            loader_iter = iter(loader)
-            return next(loader_iter)
+        t_start = time.perf_counter()
+        with torch.no_grad():
+            for _ in range(iterations):
+                _ = decoder(image, output_shape=output_shape)
 
-    # ── Warm-up ──────────────────────────────────────────────────────────
-    print("Warming up …")
-    with torch.no_grad():
-        for _ in range(warmup):
-            data = next_batch()
-            image = {k: v.to(device, non_blocking=True) for k, v in data["image"].items()}
-            target = data["target"].to(device, non_blocking=True)
-            _ = decoder(image, output_shape=target.shape[-2:])
+    else:
+        # ── Real dataset mode (with prefetching) ─────────────────────────
+        preprocessor = instantiate(
+            cfg.preprocessing.test,
+            dataset_cfg=cfg.dataset,
+            encoder_cfg=cfg.encoder,
+            _recursive_=False,
+        )
+        raw_dataset: RawGeoFMDataset = instantiate(cfg.dataset, split="test")
+        dataset = GeoFMDataset(raw_dataset, preprocessor)
 
-    if device.type == "cuda":
-        torch.cuda.synchronize()
+        modalities = list(encoder.input_bands.keys())
+        collate_fn = get_collate_fn(modalities)
 
-    # ── Timed run ────────────────────────────────────────────────────────
-    print("Benchmarking …")
-    if device.type == "cuda":
-        torch.cuda.synchronize()
+        loader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            pin_memory=True,
+            drop_last=True,
+            collate_fn=collate_fn,
+            shuffle=True,
+        )
 
-    t_start = time.perf_counter()
+        print(f"Dataset      : {cfg.dataset.dataset_name}  (split=test, {len(dataset)} samples)")
+        print(f"Batch size   : {batch_size}")
+        print(f"Warm-up      : {warmup} forward passes")
+        print(f"Iterations   : {iterations} forward passes")
+        print()
 
-    with torch.no_grad():
-        for _ in range(iterations):
-            data = next_batch()
-            image = {k: v.to(device, non_blocking=True) for k, v in data["image"].items()}
-            target = data["target"].to(device, non_blocking=True)
-            _ = decoder(image, output_shape=target.shape[-2:])
+        prefetcher = PrefetchIterator(loader, device)
+
+        print("Warming up …")
+        with torch.no_grad():
+            for _ in range(warmup):
+                image, target = prefetcher.next()
+                _ = decoder(image, output_shape=target.shape[-2:])
+
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+
+        print("Benchmarking …")
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+
+        t_start = time.perf_counter()
+        with torch.no_grad():
+            for _ in range(iterations):
+                image, target = prefetcher.next()
+                _ = decoder(image, output_shape=target.shape[-2:])
 
     if device.type == "cuda":
         torch.cuda.synchronize()

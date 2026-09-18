@@ -7,6 +7,31 @@ from os.path import join
 import pickle
 import os
 
+ALOS_BANDS = ['HH', 'HV']
+
+
+def alos_dn_to_db(dn, db_min, db_max):
+    """
+    Convert ALOS-PALSAR-2 digital numbers to gamma naught (dB), clipped to [db_min, db_max].
+
+    DN 0 and DN 1 (the latter maps to exactly -83 dB) are nodata; they are set to `db_min`, i.e. to 0
+    after min-max normalisation, the same value BandPadding uses for missing bands.
+
+    Args:
+    - dn (np.ndarray): DN values, of shape (..., n_bands)
+    - db_min (list): per-band lower clipping bound, in dB
+    - db_max (list): per-band upper clipping bound, in dB
+    Returns:
+    - db (np.ndarray): float32 gamma naught values, of the same shape as `dn`
+    """
+    db_min = np.asarray(list(db_min), dtype = np.float32)
+    db_max = np.asarray(list(db_max), dtype = np.float32)
+    nodata = dn <= 1
+    db = 20 * np.log10(np.maximum(dn, 1).astype(np.float32)) - 83.0
+    db = np.clip(db, db_min, db_max)
+    return np.where(nodata, db_min, db).astype(np.float32)
+
+
 continent_to_region = {'North America': ['California', 'Cuba'], 'South America': ['Paraguay', 'FrenchGuiana'],
     'Africa': ['UnitedRepublicofTanzania', 'Ghana'], 'Europe': ['Austria', 'Greece'],
     'South Asia': ['Nepal', 'ShaanxiProvince'], 'Australasia': ['NewZealand']}
@@ -295,6 +320,14 @@ class AGBD(RawGeoFMDataset):
         sr_bands[s2_bands == 0] = 0
         sr_bands[sr_bands < 0] = 0
 
+        # SAR bands (from ALOS-PALSAR-2) ----------------------------------------------------------
+
+        # Get the bands as clipped gamma naught values
+        alos_order = list(f['ALOS_bands'].attrs['order'])
+        alos_indices = [alos_order.index(band) for band in ALOS_BANDS]
+        alos_bands = f['ALOS_bands'][idx_start : idx_end, :, :, alos_indices]
+        alos_bands = alos_dn_to_db(alos_bands, self.data_min['sar'], self.data_max['sar'])
+
         # Target data -----------------------------------------------------------------------------
         target_value = torch.from_numpy(np.array(f['GEDI'][self.target][idx_start : idx_end], dtype = np.float32)).to(torch.float)
         lc = torch.from_numpy(np.array(f['LC'][idx_start : idx_end, :, :, 0])).long()
@@ -308,16 +341,20 @@ class AGBD(RawGeoFMDataset):
         # Convert to tensors and return -----------------------------------------------------------
         sr_bands = torch.from_numpy(sr_bands).float()
         sr_bands = sr_bands.permute(0, 3, 1, 2).unsqueeze(2) # Change to (B, C, 1, H, W)
+        alos_bands = torch.from_numpy(alos_bands).float()
+        alos_bands = alos_bands.permute(0, 3, 1, 2).unsqueeze(2) # Change to (B, C, 1, H, W)
 
         # TEMPORARY, until we can return chunks
         sr_bands = sr_bands.squeeze(0)
+        alos_bands = alos_bands.squeeze(0)
         target = target.squeeze(0)
         region = region.squeeze(0)
         biome = biome.squeeze(0)
 
         return {
             'image': {
-                'optical': sr_bands
+                'optical': sr_bands,
+                'sar': alos_bands
                 },
             'target': target,
             'metadata': {
