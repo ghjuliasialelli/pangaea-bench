@@ -118,3 +118,50 @@ def apply_lora(
         f"LoRA (r={r}, alpha={alpha}): adapted {len(targets)} weights {kinds}; "
         f"{n_lora:,} trainable of {n_total:,} encoder parameters ({100 * n_lora / n_total:.2f}%)."
     )
+
+
+def check_lora_gradients(model: nn.Module, logger: Logger) -> list[str]:
+    """Report LoRA adapters that received no gradient, i.e. that will never train.
+
+    ``apply_lora`` can only verify that attention projections *exist*; it cannot know
+    which of them the forward pass actually reaches. An encoder whose ``output_layers``
+    stop short of its full depth -- CROMA-large is 24 layers deep and its configs ask for
+    [3, 5, 7, 11] -- leaves every adapter past that point pinned at its zero-initialised
+    value. The run trains, converges and reports a number for an encoder that was only
+    partly adapted, and DDP's ``find_unused_parameters=True`` absorbs it silently. The
+    log line ``apply_lora`` emits is no help: it counts adapters installed, not adapters
+    reached.
+
+    A ``grad`` of None is unambiguous here: an adapter sits on a weight that is read
+    whenever its module runs, so None means the module never ran, or its output never
+    reached the loss. Warn rather than raise -- adapting only the first N layers is a
+    legitimate thing to configure, it just has to be deliberate.
+
+    Args:
+        model (nn.Module): the model (or encoder), after at least one backward pass.
+        logger (Logger): logger.
+
+    Returns:
+        list[str]: names of the adapter tensors without a gradient; empty if the model
+            has no LoRA adapters at all, so this is safe to call on every run.
+    """
+    adapters = [
+        (name, param)
+        for name, param in model.named_parameters()
+        if ".lora_A" in name or ".lora_B" in name
+    ]
+    if not adapters:
+        return []
+
+    dead = [name for name, param in adapters if param.grad is None]
+    if dead:
+        modules = sorted({name.rsplit(".parametrizations.", 1)[0] for name in dead})
+        logger.warning(
+            f"LoRA: {len(dead)} of {len(adapters)} adapter tensors got no gradient in the "
+            f"first backward pass. Those layers are NOT being adapted and will keep their "
+            f"zero-initialised update for the whole run -- the encoder is partly frozen. "
+            f"{len(modules)} module(s) affected: {modules}"
+        )
+    else:
+        logger.info(f"LoRA: all {len(adapters)} adapter tensors received gradients.")
+    return dead

@@ -575,6 +575,10 @@ class BaseTransformer(nn.Module):
 
     def forward(self, x, relative_position_bias=False, output_layers=None):
         output = []
+        # Stop once the deepest requested layer has been collected: CROMA-large is 24
+        # layers deep but the configs ask for [3, 5, 7, 11], so layers 12-23 would run
+        # and contribute nothing. Outputs are unchanged; the saved activations are not.
+        last_layer = None if output_layers is None else max(output_layers)
         for i, layer in enumerate(self.layers):
             self_attn, ffn = layer
             x = self_attn(x, relative_position_bias) + x  # (BSZ, num_patches, dim)
@@ -582,6 +586,9 @@ class BaseTransformer(nn.Module):
 
             if output_layers is not None and i in output_layers:
                 output.append(x)
+
+            if last_layer is not None and i >= last_layer:
+                break
 
         if self.final_norm:
             if output_layers is None:
@@ -625,6 +632,10 @@ class BaseTransformerCrossAttn(nn.Module):
     def forward(self, x, context, relative_position_bias, output_layers):
         output = []
 
+        # See BaseTransformer.forward: stop at the deepest requested layer. A no-op for
+        # croma_joint as configured (cross_encoder is 12 deep, output_layers ends at 11),
+        # kept so the two bodies cannot drift apart.
+        last_layer = None if output_layers is None else max(output_layers)
         for i, layer in enumerate(self.layers):
             self_attn, cross_attn, ffn = layer
             x = self_attn(x, relative_position_bias) + x  # (BSZ, num_patches, dim)
@@ -634,6 +645,9 @@ class BaseTransformerCrossAttn(nn.Module):
             x = ffn(x) + x  # (BSZ, num_patches, dim)
             if output_layers is not None and i in output_layers:
                 output.append(x)
+
+            if last_layer is not None and i >= last_layer:
+                break
 
         if output_layers is None:
             x = self.norm_out(x)

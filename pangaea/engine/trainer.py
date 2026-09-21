@@ -14,6 +14,7 @@ from torch.optim.lr_scheduler import LRScheduler
 from torch.optim.optimizer import Optimizer
 from torch.utils.data import DataLoader, Subset
 from pangaea.utils.logger import RunningAverageMeter, sec_to_hm
+from pangaea.utils.lora import check_lora_gradients
 
 
 class Trainer:
@@ -93,6 +94,7 @@ class Trainer:
         self.scaler = torch.cuda.amp.GradScaler("cuda", enabled=self.enable_mixed_precision)
 
         self.start_epoch = 0
+        self._lora_checked = False
 
         if self.use_wandb:
             import wandb
@@ -152,6 +154,15 @@ class Trainer:
                 )
 
             self.scaler.scale(loss).backward()
+
+            # Once, on the first backward: a LoRA adapter that gets no gradient here will
+            # never get one, and nothing else in the stack would say so. No-op on a run
+            # with no adapters.
+            if not self._lora_checked:
+                self._lora_checked = True
+                if self.rank == 0:
+                    check_lora_gradients(self.model.module, self.logger)
+
             self.scaler.step(self.optimizer)
             self.scaler.update()
             self.training_stats['loss'].update(loss.item())

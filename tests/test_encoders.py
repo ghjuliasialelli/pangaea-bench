@@ -20,8 +20,8 @@ from pangaea.encoders.base import Encoder
         "gfmswin",
         # "prithvi"
         "remoteclip",
-        "satlasnet",
-        "scalemae",
+        "satlasnet_si",
+        "satlasnet_mi",
         "scalemae",
         "spectralgpt",
         "ssl4eo_data2vec",
@@ -50,8 +50,8 @@ def test_encoder_init(config_name: str) -> None:
         "gfmswin",
         # "prithvi"
         "remoteclip",
-        "satlasnet",
-        "scalemae",
+        "satlasnet_si",
+        "satlasnet_mi",
         "scalemae",
         "spectralgpt",
         "ssl4eo_data2vec",
@@ -71,7 +71,7 @@ def test_encoder_input_shape(config_name: str) -> None:
         # fake data
         B, T = 2, 1
         data = {}
-        for modality, bands in encoder.input_bands:
+        for modality, bands in encoder.input_bands.items():
             n_bands = len(bands)
             H = W = encoder.input_size
             if encoder.multi_temporal:
