@@ -118,7 +118,9 @@ class AGBDLite(RawGeoFMDataset):
         if self.eval_big and self.mode == 'test' :
             print("Using AGBD-test.h5 file for evaluation.")
             self.fname = 'AGBD-test.h5'
-        else: self.fname = f'AGBD-Lite-{self.mode}.h5'
+        # Subclasses (AGBDLiteMT) set self.fname_prefix before calling super().__init__; the default
+        # is the original name, so the single-temporal path is unchanged.
+        else: self.fname = f'{getattr(self, "fname_prefix", "AGBD-Lite")}-{self.mode}.h5'
         self.f_handle = h5py.File(join(self.root_path, self.fname), 'r')
 
         with h5py.File(join(self.root_path, self.fname), 'r') as f:

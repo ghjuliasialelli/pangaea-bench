@@ -1,0 +1,76 @@
+# Multi-temporal AGBD-Lite: three Sentinel-2 L2A observations per GEDI footprint instead of one.
+#
+# Built by AGBD-GFMs/data/agbd_lite/gen_multitemporal.py. The two extra timesteps are the
+# least-cloudy other products covering that footprint, subject to a quality bar measured on the
+# actual 25x25 window (>=95% valid pixels, <=10% cloud). About 1% of footprints could not find
+# three qualifying dates; for those the anchor patch is repeated, which is detectable as duplicate
+# values in S2_date. ALOS-PALSAR-2 is a yearly mosaic and is broadcast across the three timesteps.
+
+_target_: pangaea.datasets.agbdlite_mt.AGBDLiteMT
+dataset_name: AGBDLiteMT
+root_path: ./data/AGBDLiteMT
+download_url: ""   # not published yet: the files are staged manually, see README
+auto_download: False
+
+img_size: 25
+multi_temporal: 3
+multi_modal: True
+
+# /cluster/work, not /cluster/scratch: scratch is purged after ~15 days of no access, and this
+# sits alongside the rest of the AGBD data (AGBD_CLUSTER_H5 in AGBD-GFMs/config.sh).
+root_path_cluster: /cluster/work/igp_psr/gsialelli/Data/patches/AGBDLiteMT
+eval_big: False # whether to evaluate on AGBD-test instead of AGBD-Lite-test
+
+# The multi-temporal files: S2_bands is (N, 3, 25, 25, 12) instead of (N, 25, 25, 12), and
+# Sentinel_metadata/S2_date is (N, 3). Everything else -- footprints, split, targets, ALOS, DEM, LC --
+# is identical to AGBD-Lite, and the AGBD patch is present bit-for-bit in one of the three slots, so
+# results remain comparable with the single-temporal runs.
+fname_prefix: AGBD-Lite-MT3
+lite_chunk_size: 1 # should be 32, once we can load in batches
+
+# for regression (agbd or rh98)
+target: "agbd" # agbd or rh98
+ignore_index: -1
+num_classes: 1
+classes:
+  - regression
+distribution:
+  - 1.
+
+# features
+bands:
+  optical:
+    - B1
+    - B2
+    - B3
+    - B4
+    - B5
+    - B6
+    - B7
+    - B8
+    - B8A
+    - B9
+    - B11
+    - B12
+  sar:
+    - VV  # ALOS-PALSAR-2 HH (L-band), named after its Sentinel-1 C-band co-pol counterpart so SAR encoders match it
+    - VH  # ALOS-PALSAR-2 HV (L-band), named after its Sentinel-1 C-band cross-pol counterpart
+
+
+# statistics (sar: computed on clipped dB of valid pixels, DN > 1)
+
+data_mean:
+  optical: [0.1235409, 0.13345453, 0.15880638, 0.15243885, 0.20159355, 0.32084775, 0.35937154, 0.37473023, 0.38475886, 0.3847485, 0.28990296, 0.21002403]
+  sar: [-9.431749, -15.752759]
+
+data_std:
+  optical: [0.023037845, 0.02647069, 0.030844089, 0.03733916, 0.041663107, 0.06969897, 0.08277564, 0.090343215, 0.086930655, 0.08083575, 0.075588495, 0.058553487]
+  sar: [3.832845, 5.171635]
+ 
+data_min:
+  optical: [1e-04, 1e-04, 0.0283, 0.0218, 0.0795, 0.0695, 0.0794, 0.0524, 0.0846, 0.0037, 0.0974, 0.0977]
+  sar: [-24.0, -35.0]  # SAR clip bounds in dB (p0.1 of valid AGBD-Lite train px); nodata is set to these
+
+data_max:
+  optical: [1.4194, 2.1088, 1.9552, 1.856, 1.6232, 1.6055, 1.586, 1.7232, 1.593, 1.7081, 1.61, 1.6255]
+  sar: [3.0, -4.0]  # SAR clip bounds in dB (p99.9 of valid AGBD-Lite train px)
