@@ -90,6 +90,11 @@ class AGBDLite(RawGeoFMDataset):
         self.patch_size = img_size
         self.zenodo_record = "18485030"
 
+        # Resolve the cluster path *before* the base class runs, since it calls download() whenever
+        # root_path does not exist -- which, for the local default, it never does on the cluster.
+        on_cluster = os.environ.get('SLURM_SUBMIT_DIR') is not None
+        if on_cluster: root_path = root_path_cluster
+
         super(AGBDLite, self).__init__(
             split=split,
             dataset_name=dataset_name,
@@ -110,9 +115,7 @@ class AGBDLite(RawGeoFMDataset):
             auto_download=auto_download,
         )
 
-        if os.environ.get('SLURM_SUBMIT_DIR') is not None:
-            print('Running on cluster, using cluster root path.')
-            self.root_path = root_path_cluster
+        if on_cluster: print('Running on cluster, using cluster root path.')
         if auto_download: self.download(self)
         self.s2_bands = ['B01', 'B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'B08', 'B8A', 'B09', 'B11', 'B12']
         if self.eval_big and self.mode == 'test' :
@@ -226,6 +229,11 @@ class AGBDLite(RawGeoFMDataset):
     def download(self, silent=False):
         
         root_path = pathlib.Path(self.root_path)
+        if not self.download_url:
+            raise FileNotFoundError(
+                f"{self.dataset_name}: no data at {root_path} and no download_url to fetch it from; "
+                f"stage the files there manually (or fix root_path / root_path_cluster)."
+            )
 
         # Create the root directory if it does not exist
         if not root_path.exists(): root_path.mkdir(parents=True, exist_ok=True)
