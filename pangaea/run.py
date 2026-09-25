@@ -133,6 +133,27 @@ def main(cfg: DictConfig) -> None:
     encoder.load_encoder_weights(logger)
     logger.info("Built {}.".format(encoder.model_name))
 
+    # a single-temporal decoder fed a T>1 dataset only fails at the first forward pass
+    # (a 5D [B, C, T, H, W] feature map reaching a 2D conv), after the dataloaders are built
+    # (siamese change-detection decoders consume their T=2 pair natively, and encoders that
+    # merge time internally, e.g. SatlasNet-MI, already emit 4D features)
+    n_frames = cfg.dataset.get("multi_temporal", False)
+    decoder_target = cfg.decoder._target_
+    encoder_merges_time = encoder.multi_temporal and not encoder.multi_temporal_output
+    if (
+        n_frames
+        and int(n_frames) > 1
+        and "multi_temporal" not in cfg.decoder
+        and "Siam" not in decoder_target
+        and not encoder_merges_time
+    ):
+        raise ValueError(
+            f"Dataset '{cfg.dataset.dataset_name}' has multi_temporal={n_frames}, but decoder "
+            f"{decoder_target} is single-temporal. Use a multi-temporal decoder "
+            f"(e.g. reg_upernet_mt_linear / reg_upernet_mt_ltae), or override "
+            f"dataset.multi_temporal=1."
+        )
+
     # prepare the decoder (segmentation/regression)
     decoder: Decoder = instantiate(
         cfg.decoder,

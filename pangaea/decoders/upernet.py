@@ -707,7 +707,12 @@ class RegMTUPerNet(RegUPerNet):
         self.multi_temporal = multi_temporal
         self.multi_temporal_strategy = multi_temporal_strategy
 
-        if self.multi_temporal_strategy == "ltae":
+        # if the encoder deals with multi_temporal inputs and
+        # returns time merged outputs then we don't need multi_temporal_strategy
+        # (mirrors SegMTUPerNet; e.g. SatlasNet-MI max-pools over time internally)
+        if self.encoder.multi_temporal and not self.encoder.multi_temporal_output:
+            self.tmap = None
+        elif self.multi_temporal_strategy == "ltae":
             ltae_in_channels = max(decoder_in_channels)
             # if the encoder output channels vary we must use an adaptor before the LTAE
             if decoder_in_channels != encoder.output_dim:
