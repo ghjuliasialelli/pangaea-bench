@@ -594,8 +594,10 @@ class RegEvaluator(Evaluator):
             inference_mode: str = 'sliding',
             sliding_inference_batch: int = None,
             use_wandb: bool = False,
+            compute_r2: bool = True,
     ):
         super().__init__(val_loader, exp_dir, device, inference_mode, sliding_inference_batch, use_wandb)
+        self.compute_r2 = compute_r2
 
     @torch.no_grad()
     def evaluate(self, model, model_name='model', model_ckpt_path=None):
@@ -616,6 +618,12 @@ class RegEvaluator(Evaluator):
         tag = f'Evaluating {model_name} on {self.split} set'
 
         mse = torch.zeros(1, device=self.device)
+
+        # R2 needs the label variance over the whole set, so it is built from global sums
+        # [SSE, sum(y), sum(y^2), n] (float64: sum(y^2) - sum(y)^2/n cancels badly in fp32).
+        # MSE/RMSE above are deliberately left as the mean of per-batch MSEs, as reported.
+        if self.compute_r2:
+            r2_stats = torch.zeros(4, device=self.device, dtype=torch.float64)
 
         # Optional per-sample dump for downstream analysis (e.g. binned-residual plots).
         # Enabled by setting AGBD_DUMP_H5 to an output path; collects the centre-pixel
@@ -651,10 +659,23 @@ class RegEvaluator(Evaluator):
 
             mse += F.mse_loss(logits, target)
 
+            if self.compute_r2:
+                p, y = logits.double(), target.double()
+                r2_stats += torch.stack([((p - y) ** 2).sum(), y.sum(), (y ** 2).sum(),
+                                         y.new_tensor(y.numel())])
+
         torch.distributed.all_reduce(mse, op=torch.distributed.ReduceOp.SUM)
         mse = mse / (len(self.val_loader) * torch.distributed.get_world_size())
 
         metrics = {"MSE": mse.item(), "RMSE": torch.sqrt(mse).item()}
+
+        if self.compute_r2:
+            torch.distributed.all_reduce(r2_stats, op=torch.distributed.ReduceOp.SUM)
+            sse, sum_y, sum_y2, n = r2_stats
+            assert n > 0, f"[{self.split}] R2: no valid targets"
+            sst = sum_y2 - sum_y ** 2 / n
+            metrics["R2"] = (1 - sse / sst).item()
+            metrics["R2_n"] = int(n.item())
         self.log_metrics(metrics)
 
         if dump_path is not None:
@@ -697,7 +718,14 @@ class RegEvaluator(Evaluator):
         header = f"[{self.split}] ------- MSE and RMSE --------\n"
         mse = f"[{self.split}]-------------------\n" + 'MSE \t{:>7}'.format('%.3f' % metrics['MSE']) + '\n'
         rmse = f"[{self.split}]-------------------\n" + 'RMSE \t{:>7}'.format('%.3f' % metrics['RMSE'])
-        self.logger.info(header + mse + rmse)
+        r2 = ""
+        if "R2" in metrics:
+            r2 = (f"\n[{self.split}]-------------------\n" + 'R2 \t{:>7}'.format('%.4f' % metrics['R2'])
+                  + f"\t(n={metrics['R2_n']})")
+        self.logger.info(header + mse + rmse + r2)
 
         if self.use_wandb and self.rank == 0:
-            wandb.log({f"{self.split}_MSE": metrics["MSE"], f"{self.split}_RMSE": metrics["RMSE"]})
+            log = {f"{self.split}_MSE": metrics["MSE"], f"{self.split}_RMSE": metrics["RMSE"]}
+            if "R2" in metrics:
+                log[f"{self.split}_R2"] = metrics["R2"]
+            wandb.log(log)

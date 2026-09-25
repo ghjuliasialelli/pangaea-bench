@@ -12,5 +12,7 @@ batch_size: 8
 use_final_ckpt: false
 finetune: false
 ckpt_dir: ???
+# also report R2 (regression only; set false to skip); computed from exact global sums, MSE/RMSE unchanged
+r2: true
 
 

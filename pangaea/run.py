@@ -82,6 +82,9 @@ def main(cfg: DictConfig) -> None:
 
     # true if training else false
     train_run = cfg.train
+    # R2 on the test set, on by default (`r2=false` to skip). Read before the test branch
+    # below swaps cfg for the run's saved training config, which would drop the override.
+    compute_r2 = bool(cfg.get("r2", True))
     if train_run:
         exp_info = get_exp_info(HydraConfig.get())
         exp_name = exp_info["exp_name"]
@@ -333,7 +336,9 @@ def main(cfg: DictConfig) -> None:
         collate_fn=collate_fn,
     )
     test_evaluator: Evaluator = instantiate(
-        cfg.task.evaluator, val_loader=test_loader, exp_dir=exp_dir, device=device
+        cfg.task.evaluator, val_loader=test_loader, exp_dir=exp_dir, device=device,
+        # only RegEvaluator takes compute_r2; other evaluators would reject the kwarg
+        **({"compute_r2": compute_r2} if cfg.task.evaluator._target_.endswith(".RegEvaluator") else {}),
     )
 
     if cfg.use_final_ckpt:
