@@ -648,7 +648,7 @@ class RegEvaluator(Evaluator):
                 raise NotImplementedError((f"Inference mode {self.inference_mode} is not implemented."))
 
             # sparse backprop
-            if self.val_loader.dataset.dataset_name in ["AGBDLite", "AGBD"]:
+            if self.val_loader.dataset.dataset_name in ["AGBDLite", "AGBD", "AGBDLiteMT"]:
                 valid_mask = (target != self.val_loader.dataset.ignore_index)
                 logits = logits[valid_mask]
                 target = target[valid_mask]

@@ -773,7 +773,7 @@ class RegTrainer(Trainer):
         """
 
         # sparse backprop
-        if self.train_loader.dataset.dataset_name in ["AGBDLite", "AGBD"]:
+        if self.train_loader.dataset.dataset_name in ["AGBDLite", "AGBD", "AGBDLiteMT"]:
             valid_mask = (target != self.train_loader.dataset.ignore_index)
             logits = logits[valid_mask.unsqueeze(1)].unsqueeze(1)
             target = target[valid_mask]
@@ -792,7 +792,7 @@ class RegTrainer(Trainer):
         """
 
         # sparse backprop
-        if self.train_loader.dataset.dataset_name in ["AGBDLite", "AGBD"]:
+        if self.train_loader.dataset.dataset_name in ["AGBDLite", "AGBD", "AGBDLiteMT"]:
             valid_mask = (target != self.train_loader.dataset.ignore_index)
             logits = logits[valid_mask.unsqueeze(1)].unsqueeze(1)
             target = target[valid_mask]
