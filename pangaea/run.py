@@ -47,6 +47,10 @@ def get_exp_info(hydra_config: HydraConf) -> dict[str, str]:
     ).hexdigest()[:6]
     timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
     fm = choices["encoder"]
+    # Tag native-GSD (padded) runs, which would otherwise share the resize run's name. It goes
+    # before `_lora` so benchmark_pangaea's encoder_of() parses the encoder as `<encoder>_pad`.
+    if str(choices.get("preprocessing", "")).endswith("_pad"):
+        fm = f"{fm}_pad"
     if choices.get("lora") is not None:
         fm = f"{fm}_lora"
     decoder = choices["decoder"]
@@ -82,6 +86,7 @@ def main(cfg: DictConfig) -> None:
 
     # true if training else false
     train_run = cfg.train
+    test_overrides = None
     # R2 on the test set, on by default (`r2=false` to skip). Read before the test branch
     # below swaps cfg for the run's saved training config, which would drop the override.
     compute_r2 = bool(cfg.get("r2", True))
@@ -113,7 +118,10 @@ def main(cfg: DictConfig) -> None:
         logger_path = exp_dir / "test.log"
         # load training config
         cfg_path = exp_dir / "configs" / "config.yaml"
+        test_overrides = cfg.get("test_overrides") or {}
         cfg = OmegaConf.load(cfg_path)
+        if test_overrides:
+            cfg = OmegaConf.merge(cfg, test_overrides)
         if cfg.task.trainer.use_wandb and rank == 0:
             import wandb
 
@@ -128,6 +136,9 @@ def main(cfg: DictConfig) -> None:
 
     logger = init_logger(logger_path, rank=rank)
     logger.info("============ Initialized logger ============")
+    if not train_run and test_overrides:
+        logger.info("test_overrides merged onto the training config: "
+                    + str(OmegaConf.to_container(test_overrides)))
     logger.info(pprint.pformat(OmegaConf.to_container(cfg), compact=True).strip("{}"))
     logger.info("The experiment is stored in %s\n" % exp_dir)
     logger.info(f"Device used: {device}")

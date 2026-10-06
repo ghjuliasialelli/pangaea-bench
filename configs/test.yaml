@@ -14,5 +14,11 @@ finetune: false
 ckpt_dir: ???
 # also report R2 (regression only; set false to skip); computed from exact global sums, MSE/RMSE unchanged
 r2: true
+# Test-time overrides, merged on top of the TRAINING config reloaded from ckpt_dir (which otherwise replaces
+# every CLI value). Use it for settings that legitimately differ between the training and the test job, e.g.
+# the data location: a run trained with dataset.root_path_cluster=$TMPDIR saved that dead path.
+#   ++test_overrides.dataset.root_path_cluster=/cluster/scratch/gsialelli
+# The saved config.yaml is never modified; the merged values are logged to test.log.
+test_overrides: {}
 
 
