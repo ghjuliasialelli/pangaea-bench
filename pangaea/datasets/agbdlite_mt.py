@@ -48,7 +48,7 @@ class AGBDLiteMT(AGBDLite):
             dict with 'image' {'optical': (C, T, H, W), 'sar': (C, T, H, W)}, 'target' (H, W) and
             'metadata'. The optical timesteps are ordered by acquisition date.
         """
-        idx_start = n * self.lite_chunk_size
+        idx_start = self._h5_row(n)
         idx_end = min(idx_start + self.lite_chunk_size, self.gedi_length)
         f = self.f_handle
 

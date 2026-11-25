@@ -1,0 +1,13 @@
+_target_: pangaea.decoders.nico_net.RegNicoNet
+
+# overwritten in run
+encoder: null
+finetune: ${finetune}
+
+# to adapt
+num_sepconv_blocks: 8
+num_sepconv_filters: 728
+long_skip: false
+returns: dense      # dense | pixel (pixel needs a feature map >= patch_size)
+patch_size: 15
+padding_mode: zeros # zeros | valid

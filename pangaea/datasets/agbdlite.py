@@ -10,6 +10,55 @@ from tqdm import tqdm
 import requests
 import pathlib
 
+# Default name of the per-row continent labels, in the dataset root next to the AGBD-Lite h5 files. Written by
+# AGBD-GFMs/benchmark_pangaea/holdout/compute_lite_holdout_stats.py from mapping_lite_to_og.pkl + tiles_per_region.pkl,
+# with the SAME row -> continent definition as AGBD-GFMs/model/dataset.py (lite_rows_for_region), which it asserts.
+LITE_CONTINENTS_FILE = 'AGBD-Lite-continents.npz'
+
+
+def agbd_fingerprint(agbd):
+    """sha1 of a split's GEDI/agbd column: ties the per-row labels to one exact row ORDER, not just a row count
+    (AGBD-Lite-MT3-* have the same row counts as AGBD-Lite-* but not the same rows in the same order)."""
+    import hashlib
+    return hashlib.sha1(np.ascontiguousarray(agbd).tobytes()).hexdigest()
+
+
+def lite_rows_for_region(path_continents, mode, region, keep_region, n_rows, fingerprint):
+    """
+    Geographic hold-out for AGBD-Lite. An AGBD-Lite file is one flat list of samples with no tile structure, so
+    the region of each row comes from a precomputed label file (see LITE_CONTINENTS_FILE).
+
+    Args:
+    - path_continents (str): path to the .npz with one int8 continent code per row for each split, and `names`
+    - mode (str): train, val or test
+    - region (str): a continent name as in AGBD-GFMs/model/dataset.py, e.g. SouthAsia
+    - keep_region (bool): keep only the region's rows (True) or drop them (False)
+    - n_rows (int): number of rows of the AGBD-Lite h5 file, to check the labels against
+    - fingerprint (str): agbd_fingerprint of the h5 file's GEDI/agbd, must equal the one the labels were built for
+
+    Returns:
+    - rows (np.ndarray): sorted AGBD-Lite row indices to keep
+    """
+    if not isfile(path_continents):
+        raise FileNotFoundError(f"{path_continents} not found: needed to select AGBD-Lite rows by region ({region!r}). "
+                                f"Copy it next to the AGBD-Lite h5 files.")
+    with np.load(path_continents) as z:
+        names = [str(c) for c in z['names']]
+        labels = z[mode]
+        expected = str(z[f'agbd_sha1_{mode}'])
+    if region not in names:
+        raise ValueError(f"Unknown region {region!r}; expected one of {names}")
+    assert len(labels) == n_rows, f"{path_continents}[{mode}] has {len(labels)} rows, the AGBD-Lite {mode} file has {n_rows}"
+    if fingerprint != expected:
+        raise ValueError(f"{path_continents} labels the rows of a different {mode} file (GEDI/agbd sha1 {expected}, "
+                         f"this file {fingerprint}): same row count, different rows or order. Rebuild the labels for this file.")
+    in_region = labels == names.index(region)
+    rows = np.flatnonzero(in_region if keep_region else ~in_region)
+    assert len(rows) > 0, f"AGBD-Lite {mode}: no rows left after {'keeping' if keep_region else 'holding out'} {region}"
+    print(f"AGBD-Lite {mode}: {'keeping only' if keep_region else 'holding out'} {region} "
+          f"({int(in_region.sum()):,} of {n_rows:,} rows in region) -> {len(rows):,} rows used")
+    return rows
+
 REF_BIOMES = {
     20: 'Shrubs', 30: 'Herbaceous vegetation', 40: 'Cultivated', 90: 'Herbaceous wetland',
     111: 'Closed-ENL', 112: 'Closed-EBL', 114: 'Closed-DBL', 115: 'Closed-mixed',
@@ -79,8 +128,20 @@ class AGBDLite(RawGeoFMDataset):
         root_path_cluster: str,
         target: str,
         eval_big: bool, 
-        lite_chunk_size: int
+        lite_chunk_size: int,
+        hold_out_region: str | None = None,
+        test_region: str | None = None,
+        continents_file: str = LITE_CONTINENTS_FILE,
     ):
+        """
+        Geographic hold-out (all default to off, i.e. the original behaviour):
+        - hold_out_region: drop this continent's rows from the train AND val splits (val drives model selection).
+          The test split is never filtered by it.
+        - test_region: test on this continent's rows only. Set it, for the held-out model and for the
+          in-distribution baseline alike, to compare both on the same footprints.
+        - continents_file: per-row continent labels, in root_path.
+        Region names are AGBD-GFMs/model/dataset.py's continent_to_region keys (e.g. SouthAsia).
+        """
 
         assert split in ['train', 'val', 'test'], "split must be one of 'train', 'val', or 'test'"
         self.mode = split
@@ -131,6 +192,25 @@ class AGBDLite(RawGeoFMDataset):
             total_length = (gedi_length // self.lite_chunk_size) + (1 if (gedi_length % self.lite_chunk_size != 0) else 0)
         self.gedi_length, self.length = gedi_length, total_length
 
+        # Geographic hold-out: `self.rows` maps dataset index -> h5 row. gedi_length stays the h5 length.
+        self.rows = None
+        region = hold_out_region if self.mode in ['train', 'val'] else test_region
+        if region is not None:
+            if self.lite_chunk_size != 1:
+                raise NotImplementedError("Region selection on AGBD-Lite needs lite_chunk_size == 1.")
+            if self.mode == 'test' and self.eval_big:
+                raise NotImplementedError("test_region is only defined for AGBD-Lite-test.h5, not eval_big (AGBD-test.h5).")
+            fingerprint = agbd_fingerprint(self.f_handle['GEDI']['agbd'][:])
+            self.rows = lite_rows_for_region(join(self.root_path, continents_file), self.mode, region,
+                                             keep_region = (self.mode == 'test'), n_rows = gedi_length,
+                                             fingerprint = fingerprint)
+            self.length = len(self.rows)
+
+    def _h5_row(self, n):
+        """Dataset index -> first h5 row of the chunk (identity unless a region is selected)."""
+        if self.rows is None: return n * self.lite_chunk_size
+        return int(self.rows[n])
+
     def __len__(self):
         # Return the total number of samples
         return int(self.length)
@@ -157,8 +237,8 @@ class AGBDLite(RawGeoFMDataset):
         """
 
         # Find the file, tile, and row index corresponding to this chunk
-        idx_start = n * self.lite_chunk_size
-        idx_end = min(idx_start + self.lite_chunk_size, self.gedi_length)   
+        idx_start = self._h5_row(n)
+        idx_end = min(idx_start + self.lite_chunk_size, self.gedi_length)
         f = self.f_handle
 
         # Sentinel-2 bands ------------------------------------------------------------------------
