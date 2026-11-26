@@ -36,7 +36,16 @@ continent_to_region = {'North America': ['California', 'Cuba'], 'South America':
     'Africa': ['UnitedRepublicofTanzania', 'Ghana'], 'Europe': ['Austria', 'Greece'],
     'South Asia': ['Nepal', 'ShaanxiProvince'], 'Australasia': ['NewZealand']}
 
-def initialize_index(fnames, mode, chunk_size, path_mapping, path_h5, hold_out_region = None, keep_region = False, drop_overlaps = False) :
+def region_tiles(path_h5, region) :
+    """The S2 tiles of a world region (a key of `continent_to_region`, e.g. 'South Asia'), from tiles_per_region.pkl --
+    the same definition as AGBD-GFMs/model/dataset.py (whose keys are the same without spaces, e.g. 'SouthAsia')."""
+    if region not in continent_to_region :
+        raise ValueError(f"Unknown region {region!r}; expected one of {list(continent_to_region)}")
+    with open(join(path_h5, 'tiles_per_region.pkl'), 'rb') as f: tiles_per_region = pickle.load(f)
+    return set(str(t) for subregion in continent_to_region[region] for t in tiles_per_region[subregion])
+
+
+def initialize_index(fnames, mode, chunk_size, path_mapping, path_h5, hold_out_region = None, keep_region = False, drop_overlaps = False, test_region = None) :
     """
     This function creates the index for the dataset. The index is a dictionary which maps the file
     names (`fnames`) to the tiles that are in the `mode` (train, val, test); and the tiles to the
@@ -51,6 +60,7 @@ def initialize_index(fnames, mode, chunk_size, path_mapping, path_h5, hold_out_r
     - hold_out_region (str): the region to hold out
     - keep_region (bool): whether to keep the specified region
     - drop_overlaps (bool): whether to drop overlapping patches
+    - test_region (str): in test mode, keep ONLY the tiles of this region (regional test)
 
     Returns:
     - idx (dict): dictionary mapping the file names to the tiles and the tiles to the chunks
@@ -61,15 +71,11 @@ def initialize_index(fnames, mode, chunk_size, path_mapping, path_h5, hold_out_r
     with open(join(path_mapping, 'biomes_splits_to_name.pkl'), 'rb') as f:
         tile_mapping = pickle.load(f)[mode]
 
-    # Skip the tiles in the region to hold out, if specified (only for train and val)
-    if hold_out_region and mode in ['train', 'val'] :
-        # Mapping from e.g. New Zealand to the S2 tiles it contains
-        with open(join(path_h5, 'tiles_per_region.pkl'), 'rb') as f: tiles_per_region = pickle.load(f)
-        # Mapping from world region (e.g. North America) to the regions in it (e.g. California, Cuba)
-        subregions = continent_to_region.get(hold_out_region)
-        hold_out_tiles = []
-        for region in subregions : hold_out_tiles.extend(tiles_per_region[region])
-    else : hold_out_tiles = []
+    # Region selection. train / val: drop the tiles of `hold_out_region` (keep_region = False, cross-region) or keep
+    # only them (keep_region = True, within-region). test: keep only the tiles of `test_region`.
+    if hold_out_region and mode in ['train', 'val'] : sel_tiles, keep = region_tiles(path_h5, hold_out_region), keep_region
+    elif test_region and mode == 'test' : sel_tiles, keep = region_tiles(path_h5, test_region), True
+    else : sel_tiles, keep = None, None
 
     # If need to drop the test patches that overlap with the AEF train set
     if drop_overlaps:
@@ -90,11 +96,7 @@ def initialize_index(fnames, mode, chunk_size, path_mapping, path_h5, hold_out_r
             # Iterate over the tiles
             for tile in tiles :
 
-                if (keep_region and len(hold_out_tiles) > 0):
-                    if tile not in hold_out_tiles : 
-                        continue
-                else: 
-                    if tile in hold_out_tiles : continue
+                if sel_tiles is not None and (str(tile) in sel_tiles) != keep : continue
 
                 # Get the number of patches in the tile
                 if drop_overlaps :
@@ -109,6 +111,9 @@ def initialize_index(fnames, mode, chunk_size, path_mapping, path_h5, hold_out_r
     
     if drop_overlaps : total_length = sum(sum(d['n_patches'] for d in idx[fname].values()) for fname in idx.keys())
     else: total_length = sum(sum(v for v in d.values()) for d in idx.values())
+    if sel_tiles is not None :
+        assert total_length > 0, f'AGBD {mode}: no samples left after the region selection'
+        print(f'AGBD {mode}: ' + (f'test region {test_region}' if mode == 'test' else f"{'keeping only' if keep else 'holding out'} {hold_out_region}") + f' -> {total_length:,} samples')
 
     return idx, total_length
 
@@ -179,10 +184,11 @@ def find_index_for_chunk(index, ranges, n, total_length, drop_overlaps = False) 
             return fname, tname, chunk_within_tile
 
 
-def get_file_and_idx(eval_lite, mode, index, ranges, n, length, drop_overlaps, handles) :
+def get_file_and_idx(eval_lite, mode, index, ranges, n, length, drop_overlaps, handles, rows = None) :
 
     if eval_lite and mode == 'val' :
-        idx_start, idx_end = n, n + 1
+        row = n if rows is None else int(rows[n]) # rows: the AGBD-Lite-val rows kept by the region selection
+        idx_start, idx_end = row, row + 1
         return handles, idx_start, idx_end
 
     else:
@@ -219,7 +225,11 @@ class AGBD(RawGeoFMDataset):
         hold_out_region: str | None = None,
         keep_region: bool = False,
         drop_overlaps: bool = False,
-        eval_lite: bool = False
+        eval_lite: bool = False,
+        test_region: str | None = None,
+        continents_file: str = 'AGBD-Lite-continents.npz',
+        years: list[int] | None = None,
+        test_years: list[int] | None = None
     ):
         super(AGBD, self).__init__(
             split=split,
@@ -254,20 +264,32 @@ class AGBD(RawGeoFMDataset):
         self.h5_path, self.mapping = self.root_path, self.root_path
 
         # Evaluate on the AGBD-Lite validation set
+        self.rows = None
         if self.eval_lite and split == 'val' :
             self.handles = h5py.File(join(self.root_path, 'AGBD-Lite-val.h5'), 'r')
             self.index, self.ranges, self.drop_overlaps = None, None, None
             self.length = len(self.handles['GEDI']['agbd'])
+            # The validation set picks the best checkpoint, so it gets the same region selection as train: without
+            # it, a cross-region run would select its checkpoint on data that includes the held-out region.
+            if hold_out_region :
+                from pangaea.datasets.agbdlite import agbd_fingerprint, lite_rows_for_region # (agbdlite imports agbd)
+                self.rows = lite_rows_for_region(join(self.root_path, continents_file), 'val', hold_out_region.replace(' ', ''),
+                                                 keep_region = keep_region, n_rows = self.length,
+                                                 fingerprint = agbd_fingerprint(self.handles['GEDI']['agbd'][:]))
+                self.length = len(self.rows)
 
         # Regular training and evaluation on the full dataset
         else:
-            self.fnames = [f'data_subset-{year}-v4_{i}-20.h5' for i in range(20) for year in [2019,2020]]
+            # Temporal generalization: `years` for train (and val, when not eval_lite), `test_years` for test.
+            years = list(test_years if split == 'test' and test_years is not None else years if years is not None else [2019, 2020])
+            assert set(years) <= {2019, 2020} and len(years) > 0, f'years must be a non-empty subset of [2019, 2020], got {years}'
+            self.fnames = [f'data_subset-{year}-v4_{i}-20.h5' for i in range(20) for year in [y for y in [2019, 2020] if y in years]]
 
             self.hold_out_region = hold_out_region
             self.keep_region = keep_region
             self.drop_overlaps = drop_overlaps and split == 'test'
 
-            self.index, self.length = initialize_index(self.fnames, self.mode, 1, self.mapping, self.h5_path, self.hold_out_region, self.keep_region, self.drop_overlaps)
+            self.index, self.length = initialize_index(self.fnames, self.mode, 1, self.mapping, self.h5_path, self.hold_out_region, self.keep_region, self.drop_overlaps, test_region)
             self.ranges = init_ranges_for_chunk(self.index, self.length, drop_overlaps = self.drop_overlaps)
 
             self.handles = {fname: h5py.File(join(self.h5_path, fname), 'r') for fname in self.index.keys()}
@@ -299,7 +321,7 @@ class AGBD(RawGeoFMDataset):
         """
 
         # Find the file, tile, and row index corresponding to this chunk
-        f, idx_start, idx_end = get_file_and_idx(self.eval_lite, self.mode, self.index, self.ranges, n, self.length, self.drop_overlaps, self.handles)
+        f, idx_start, idx_end = get_file_and_idx(self.eval_lite, self.mode, self.index, self.ranges, n, self.length, self.drop_overlaps, self.handles, self.rows)
 
         # Sentinel-2 bands ------------------------------------------------------------------------
         
